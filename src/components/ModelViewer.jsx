@@ -1,19 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-import { STLLoader } from 'three/examples/jsm/loaders/STLLoader';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 
 const ModelViewer = () => {
   const mountRef = useRef(null);
   const [file, setFile] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const rendererRef = useRef(null);
+  const sceneRef = useRef(null);
+  const controlsRef = useRef(null);
 
   useEffect(() => {
     if (!mountRef.current) return;
 
     // Scene setup
     const scene = new THREE.Scene();
+    sceneRef.current = scene;
     scene.background = new THREE.Color(0xf5f5f5);
 
     // Camera setup
@@ -27,11 +31,13 @@ const ModelViewer = () => {
 
     // Renderer setup
     const renderer = new THREE.WebGLRenderer({ antialias: true });
+    rendererRef.current = renderer;
     renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
     mountRef.current.appendChild(renderer.domElement);
 
     // Controls
     const controls = new OrbitControls(camera, renderer.domElement);
+    controlsRef.current = controls;
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
 
@@ -43,76 +49,113 @@ const ModelViewer = () => {
     directionalLight.position.set(2, 2, 2);
     scene.add(directionalLight);
 
+    // Handle window resize
+    const handleResize = () => {
+      if (!mountRef.current) return;
+      
+      camera.aspect = mountRef.current.clientWidth / mountRef.current.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+    };
+    
+    window.addEventListener('resize', handleResize);
+
     // Animation
     const animate = () => {
+      if (!mountRef.current) return;
+      
       requestAnimationFrame(animate);
-      controls.update();
+      if (controlsRef.current) {
+        controlsRef.current.update();
+      }
       renderer.render(scene, camera);
     };
     animate();
 
-    // Load STL if file exists
-    if (file) {
-      setLoading(true);
-      setError(null);
-
-      const loader = new STLLoader();
-      const reader = new FileReader();
-
-      reader.onload = function(e) {
-        try {
-          const geometry = loader.parse(e.target.result);
-          const material = new THREE.MeshPhongMaterial({
-            color: 0x3f51b5,
-            specular: 0x111111,
-            shininess: 200
-          });
-          const mesh = new THREE.Mesh(geometry, material);
-
-          // Center the model
-          geometry.computeBoundingBox();
-          const boundingBox = geometry.boundingBox;
-          const center = new THREE.Vector3();
-          boundingBox.getCenter(center);
-          mesh.position.sub(center);
-
-          // Scale the model to fit view
-          const size = new THREE.Vector3();
-          boundingBox.getSize(size);
-          const maxDim = Math.max(size.x, size.y, size.z);
-          const scale = 3 / maxDim;
-          mesh.scale.multiplyScalar(scale);
-
-          // Remove any existing model
-          scene.children.forEach((child) => {
-            if (child instanceof THREE.Mesh) {
-              scene.remove(child);
-            }
-          });
-
-          scene.add(mesh);
-          setLoading(false);
-        } catch (error) {
-          setError('Error loading STL file. Please try another file.');
-          setLoading(false);
-        }
-      };
-
-      reader.onerror = function() {
-        setError('Error reading file');
-        setLoading(false);
-      };
-
-      reader.readAsArrayBuffer(file);
-    }
-
     // Cleanup
     return () => {
-      if (mountRef.current) {
-        mountRef.current.removeChild(renderer.domElement);
+      window.removeEventListener('resize', handleResize);
+      if (mountRef.current && rendererRef.current) {
+        mountRef.current.removeChild(rendererRef.current.domElement);
       }
-      renderer.dispose();
+      if (rendererRef.current) {
+        rendererRef.current.dispose();
+      }
+      // Dispose all geometries and materials
+      if (sceneRef.current) {
+        sceneRef.current.traverse((object) => {
+          if (object.geometry) {
+            object.geometry.dispose();
+          }
+          if (object.material) {
+            if (Array.isArray(object.material)) {
+              object.material.forEach(material => material.dispose());
+            } else {
+              object.material.dispose();
+            }
+          }
+        });
+      }
     };
+  }, []);
+
+  useEffect(() => {
+    if (!file || !sceneRef.current) return;
+    
+    setLoading(true);
+    setError(null);
+
+    const loader = new STLLoader();
+    const reader = new FileReader();
+
+    reader.onload = function(e) {
+      try {
+        const geometry = loader.parse(e.target.result);
+        const material = new THREE.MeshPhongMaterial({
+          color: 0x3f51b5,
+          specular: 0x111111,
+          shininess: 200
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+
+        // Center the model
+        geometry.computeBoundingBox();
+        const boundingBox = geometry.boundingBox;
+        const center = new THREE.Vector3();
+        boundingBox.getCenter(center);
+        mesh.position.sub(center);
+
+        // Scale the model to fit view
+        const size = new THREE.Vector3();
+        boundingBox.getSize(size);
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const scale = 3 / maxDim;
+        mesh.scale.multiplyScalar(scale);
+
+        // Remove any existing model
+        if (sceneRef.current) {
+          sceneRef.current.children.forEach((child) => {
+            if (child instanceof THREE.Mesh) {
+              sceneRef.current.remove(child);
+            }
+          });
+          sceneRef.current.add(mesh);
+        }
+        
+        setLoading(false);
+      } catch (error) {
+        console.error("Error parsing STL:", error);
+        setError('Error loading STL file. Please try another file.');
+        setLoading(false);
+      }
+    };
+
+    reader.onerror = function() {
+      setError('Error reading file');
+      setLoading(false);
+    };
+
+    reader.readAsArrayBuffer(file);
   }, [file]);
 
   const handleFileChange = (event) => {
